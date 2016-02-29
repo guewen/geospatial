@@ -27,6 +27,11 @@ var FieldGeoEngineEditMap = common.AbstractField.extend(geoengine_common.Geoengi
     modify_control: null,
     draw_control: null,
 
+    init: function(parent, options) {
+        this._super.apply(this, arguments);
+        this.zoom_to_extent_on_features = true;
+    },
+
     create_edit_layers: function(self, field_infos) {
         var vl = new OpenLayers.Layer.Vector(self.name, {
             styleMap: new OpenLayers.StyleMap({
@@ -81,11 +86,8 @@ var FieldGeoEngineEditMap = common.AbstractField.extend(geoengine_common.Geoengi
         });
     },
 
-    start: function() {
-        this._super.apply(this, arguments);
-        if (this.map) {
-            return;
-        }
+    willStart: function() {
+        var deferred = this._super.apply(this, arguments);
         this.view.on("change:actual_mode", this, this.on_mode_change);
         var self = this;
         // add a listener on parent tab if it exists in order to refresh geoengine view
@@ -96,35 +98,61 @@ var FieldGeoEngineEditMap = common.AbstractField.extend(geoengine_common.Geoengi
         var blacklist = this.view.fields_order.slice();
         delete blacklist[this.name];
         var rdataset = new data.DataSetStatic(self, self.view.model, self.build_context(blacklist));
+        var deferred = new jQuery.Deferred();
         rdataset.call("get_edit_info_for_geo_column", [self.name, rdataset.get_context()], false, 0).then(function(result) {
             self.layers = self.create_edit_layers(self, result);
             self.geo_type = result.geo_type;
             self.default_extent = result.default_extent;
             self.srid = result.srid;
-            if (self.$el.is(':visible')){
-                self.render_map();
-            }
+
+            deferred.resolve();
         });
+        return jQuery.when(
+            this._super.apply(this, arguments), deferred
+        );
     },
 
     set_value: function(value) {
         this._super.apply(this, arguments);
         this.value = value;
         if (this.map) {
-            var vl = this.map.getLayersByName(this.name)[0];
-            vl.destroyFeatures();
+            var layer = this.get_value_layer();
+            layer.destroyFeatures();
             if (this.value) {
                 var features = this.format.read(this.value);
-                vl.addFeatures(features, {silent: true});
-                this.map.zoomToExtent(vl.getDataExtent());
-            } else {
-                this.map.zoomToExtent(this.default_extend);
+                layer.addFeatures(features, {silent: true});
+            }
+            if (this.zoom_to_extent_on_features) {
+                this.zoom_to_extent();
             }
         }
     },
 
+    set_value_from_ui: function(value) {
+      this.zoom_to_extent_on_features = false;
+      this.set_value(value);
+      this.zoom_to_extent_on_features = true;
+    },
+
+    get_value_layer: function() {
+        if (this.map) {
+            return this.map.getLayersByName(this.name)[0];
+        }
+    },
+
+    zoom_to_extent: function() {
+      if (this.map) {
+          var layer = this.get_value_layer();
+          if (this.value && layer) {
+              this.map.zoomToExtent(layer.getDataExtent());
+          } else {
+              this.map.zoomToExtent(this.default_extend);
+          }
+      }
+    },
+
     on_ui_change: function() {
-        this.set_value(this.format.write(this._geometry));
+        this.set_value_from_ui(this.format.write(this._geometry));
     },
 
     validate: function() {
@@ -134,6 +162,13 @@ var FieldGeoEngineEditMap = common.AbstractField.extend(geoengine_common.Geoengi
     on_mode_change: function() {
         this.render_map();
         this.$el.toggle(!this.invisible);
+    },
+
+    render_value: function() {
+        this._super();
+        if (this.$el.is(':visible')){
+            this.render_map();
+        }
     },
 
     render_map: function() {
